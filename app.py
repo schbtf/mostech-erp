@@ -13,33 +13,55 @@ from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-# Türkçe Karakter Destekli Font Yükleme (Linux / Streamlit Cloud Uyumlu)
-FONT_REG_PATH = "DejaVuSans.ttf"
-FONT_BOLD_PATH = "DejaVuSans-Bold.ttf"
-
-def font_hazirla():
-    if not os.path.exists(FONT_REG_PATH):
+# --- TÜRKÇE KARAKTER VE FONT DESTEĞİ ---
+def font_yukle():
+    font_paths_reg = [
+        "arial.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/Library/Fonts/Arial.ttf"
+    ]
+    font_paths_bold = [
+        "arialbd.ttf",
+        "C:\\Windows\\Fonts\\arialbd.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/Library/Fonts/Arial Bold.ttf"
+    ]
+    
+    reg_path = next((p for p in font_paths_reg if os.path.exists(p)), None)
+    bold_path = next((p for p in font_paths_bold if os.path.exists(p)), None)
+    
+    # Yerel sistemde font bulunamazsa otomatik Unicode destekli font indir
+    if not reg_path:
         try:
             url = "https://raw.githubusercontent.com/dejavu-fonts/dejavu-fonts/master/ttf/DejaVuSans.ttf"
-            urllib.request.urlretrieve(url, FONT_REG_PATH)
+            urllib.request.urlretrieve(url, "DejaVuSans.ttf")
+            reg_path = "DejaVuSans.ttf"
         except Exception:
             pass
 
-    if not os.path.exists(FONT_BOLD_PATH):
+    if not bold_path:
         try:
-            url = "https://raw.githubusercontent.com/dejavu-fonts/dejavu-fonts/master/ttf/DejaVuSans-Bold.ttf"
-            urllib.request.urlretrieve(url, FONT_BOLD_PATH)
+            url_bold = "https://raw.githubusercontent.com/dejavu-fonts/dejavu-fonts/master/ttf/DejaVuSans-Bold.ttf"
+            urllib.request.urlretrieve(url_bold, "DejaVuSans-Bold.ttf")
+            bold_path = "DejaVuSans-Bold.ttf"
         except Exception:
             pass
 
-    try:
-        pdfmetrics.registerFont(TTFont('TRFont', FONT_REG_PATH))
-        pdfmetrics.registerFont(TTFont('TRFont-Bold', FONT_BOLD_PATH))
-        return 'TRFont', 'TRFont-Bold'
-    except Exception:
-        return 'Helvetica', 'Helvetica-Bold'
+    if reg_path and bold_path:
+        try:
+            pdfmetrics.registerFont(TTFont('TRFont', reg_path))
+            pdfmetrics.registerFont(TTFont('TRFont-Bold', bold_path))
+            pdfmetrics.registerFontFamily('TRFont', normal='TRFont', bold='TRFont-Bold', italic='TRFont', boldItalic='TRFont-Bold')
+            return 'TRFont', 'TRFont-Bold'
+        except Exception:
+            pass
+            
+    return 'Helvetica', 'Helvetica-Bold'
 
-FONT_REG, FONT_BOLD = font_hazirla()
+FONT_REG, FONT_BOLD = font_yukle()
 
 class NumberedCanvas(canvas.Canvas):
     def __init__(self, *args, **kwargs):
@@ -128,7 +150,6 @@ def vt_kur():
         )
     """)
     
-    # İlk varsayılan kullanıcı kontrolü
     cursor.execute("SELECT COUNT(*) FROM kullanicilar")
     if cursor.fetchone()[0] == 0:
         cursor.execute("INSERT INTO kullanicilar (kullanici_adi, sifre) VALUES (?, ?)", ("mostech", "Eelsan21."))
@@ -138,7 +159,7 @@ def vt_kur():
 
 vt_kur()
 
-# --- GİRİŞ KONTROLÜ (AUTHENTICATION) ---
+# --- GİRİŞ KONTROLÜ ---
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if "user" not in st.session_state:
@@ -172,7 +193,7 @@ if not st.session_state.authenticated:
                 st.error("Kullanıcı adı veya şifre hatalı!")
     st.stop()
 
-# --- ANA UYGULAMA DÖNGÜSÜ ---
+# --- YARDIMCI FONKSİYONLAR ---
 def tcmb_kuru_cek():
     try:
         url = "https://www.tcmb.gov.tr/kurlar/today.xml"
@@ -327,7 +348,6 @@ def pdf_uret_buffer(musteri_adi, kur, para_birimi, kalemler, logo_path="logo.png
 
 st.set_page_config(page_title="Mostech ERP Web", layout="wide")
 
-# Sidebar Kullanıcı Bilgisi & Çıkış
 st.sidebar.markdown(f"**Aktif Kullanıcı:** `{st.session_state.user}`")
 if st.sidebar.button("🚪 Çıkış Yap"):
     st.session_state.authenticated = False
