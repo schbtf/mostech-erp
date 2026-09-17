@@ -13,15 +13,33 @@ from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-# Türkçe Karakter ve Font Desteği
-try:
-    pdfmetrics.registerFont(TTFont('Arial', 'C:\\Windows\\Fonts\\arial.ttf'))
-    pdfmetrics.registerFont(TTFont('Arial-Bold', 'C:\\Windows\\Fonts\\arialbd.ttf'))
-    FONT_REG = 'Arial'
-    FONT_BOLD = 'Arial-Bold'
-except Exception:
-    FONT_REG = 'Helvetica'
-    FONT_BOLD = 'Helvetica-Bold'
+# Türkçe Karakter Destekli Font Yükleme (Linux / Streamlit Cloud Uyumlu)
+FONT_REG_PATH = "DejaVuSans.ttf"
+FONT_BOLD_PATH = "DejaVuSans-Bold.ttf"
+
+def font_hazirla():
+    if not os.path.exists(FONT_REG_PATH):
+        try:
+            url = "https://raw.githubusercontent.com/dejavu-fonts/dejavu-fonts/master/ttf/DejaVuSans.ttf"
+            urllib.request.urlretrieve(url, FONT_REG_PATH)
+        except Exception:
+            pass
+
+    if not os.path.exists(FONT_BOLD_PATH):
+        try:
+            url = "https://raw.githubusercontent.com/dejavu-fonts/dejavu-fonts/master/ttf/DejaVuSans-Bold.ttf"
+            urllib.request.urlretrieve(url, FONT_BOLD_PATH)
+        except Exception:
+            pass
+
+    try:
+        pdfmetrics.registerFont(TTFont('TRFont', FONT_REG_PATH))
+        pdfmetrics.registerFont(TTFont('TRFont-Bold', FONT_BOLD_PATH))
+        return 'TRFont', 'TRFont-Bold'
+    except Exception:
+        return 'Helvetica', 'Helvetica-Bold'
+
+FONT_REG, FONT_BOLD = font_hazirla()
 
 class NumberedCanvas(canvas.Canvas):
     def __init__(self, *args, **kwargs):
