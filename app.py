@@ -339,6 +339,7 @@ st.set_page_config(page_title="Mostech ERP Web", layout="wide")
 
 # Sidebar Kullanıcı Bilgisi & Çıkış
 st.sidebar.markdown(f"**Aktif Kullanıcı:** `{st.session_state.user}`")
+st.sidebar.caption(f"PDF Font Durumu: {FONT_REG}")
 if st.sidebar.button("🚪 Çıkış Yap"):
     st.session_state.authenticated = False
     st.session_state.user = None
