@@ -5,6 +5,8 @@ import os
 import urllib.request
 import xml.etree.ElementTree as ET
 import pandas as pd
+import random
+from datetime import datetime
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -137,6 +139,28 @@ def vt_kur():
             sifre TEXT
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS teklifler (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            teklif_no TEXT UNIQUE,
+            musteri_adi TEXT,
+            tarih TEXT,
+            para_birimi TEXT,
+            kur REAL,
+            toplam_usd REAL
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS teklif_kalemleri (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            teklif_id INTEGER,
+            urun_adi TEXT,
+            miktar REAL,
+            birim_fiyat REAL,
+            toplam REAL,
+            FOREIGN KEY(teklif_id) REFERENCES teklifler(id) ON DELETE CASCADE
+        )
+    """)
     
     # İlk varsayılan kullanıcı kontrolü
     cursor.execute("SELECT COUNT(*) FROM kullanicilar")
@@ -228,8 +252,9 @@ def pdf_uret_buffer(musteri_adi, kur, para_birimi, kalemler, logo_path="logo.png
         "Web: www.mostechgrup.com | E-posta: info@mostechgrup.com"
     )
 
+    tarih_str = datetime.now().strftime("%d.%m.%Y")
     header_table = Table([[logo_element, Paragraph("TEKLİF FORMU", subtitle_style)],
-                           [Paragraph(sirket_bilgi_metni, text_style), Paragraph("<b>Tarih:</b> 31.08.2026", ParagraphStyle('R', parent=text_style, alignment=2))]], colWidths=[310, 213])
+                           [Paragraph(sirket_bilgi_metni, text_style), Paragraph(f"<b>Tarih:</b> {tarih_str}", ParagraphStyle('R', parent=text_style, alignment=2))]], colWidths=[310, 213])
     header_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP')]))
     story.append(header_table); story.append(Spacer(1, 15))
 
@@ -357,6 +382,8 @@ if "kalemler" not in st.session_state:
     st.session_state.kalemler = []
 if "guncel_kur" not in st.session_state:
     st.session_state.guncel_kur = tcmb_kuru_cek()
+if "yuklenen_musteri" not in st.session_state:
+    st.session_state.yuklenen_musteri = ""
 
 tab_teklif, tab_stok, tab_cari, tab_kasa, tab_sifre = st.tabs([
     "Teklif Hazırlama", "Stok Yönetimi", "Cari & Hesap Yönetimi", "Kasa Gelir/Gider", "⚙️ Şifre Değiştir"
@@ -373,7 +400,9 @@ with tab_teklif:
     
     col_c1, col_c2, col_c3, col_c4 = st.columns([2, 2, 1, 1])
     secilen_cari = col_c1.selectbox("Cari Müşteri Seç", ["- Manuel Gir -"] + cari_unvanlar)
-    musteri_input = col_c2.text_input("Müşteri / Firma Adı", value="" if secilen_cari == "- Manuel Gir -" else secilen_cari)
+    
+    varsayilan_musteri = st.session_state.yuklenen_musteri if st.session_state.yuklenen_musteri else ("" if secilen_cari == "- Manuel Gir -" else secilen_cari)
+    musteri_input = col_c2.text_input("Müşteri / Firma Adı", value=varsayilan_musteri)
     para_birimi = col_c3.selectbox("Teklif Para Birimi", ["USD ($)", "TRY (₺)"])
     kur = col_c4.number_input("USD/TRY Kuru", value=st.session_state.guncel_kur, format="%.4f")
     
@@ -382,6 +411,46 @@ with tab_teklif:
         st.rerun()
 
     st.divider()
+
+    # --- KAYITLI TEKLİFLERİ YÜKLEME PANALİ ---
+    with st.expander("📂 Kayıtlı Teklifler (Yükle / Düzenle / Sil)"):
+        conn = sqlite3.connect(DB_NAME)
+        kayitli_teklifler = conn.execute("SELECT id, teklif_no, musteri_adi, tarih, toplam_usd FROM teklifler ORDER BY id DESC").fetchall()
+        conn.close()
+        
+        if kayitli_teklifler:
+            teklif_options = {f"{t[1]} - {t[2]} ({t[3]}) - ${t[4]:,.2f}": t[0] for t in kayitli_teklifler}
+            secilen_teklif_str = st.selectbox("Geçmiş Teklif Seçin", list(teklif_options.keys()))
+            secilen_teklif_id = teklif_options[secilen_teklif_str]
+            
+            col_y1, col_y2 = st.columns([1, 1])
+            if col_y1.button("Teklifi Ekrana Yükle", type="secondary"):
+                conn = sqlite3.connect(DB_NAME)
+                cur = conn.cursor()
+                t_row = cur.execute("SELECT musteri_adi, para_birimi, kur FROM teklifler WHERE id=?", (secilen_teklif_id,)).fetchone()
+                k_rows = cur.execute("SELECT urun_adi, miktar, birim_fiyat, toplam FROM teklif_kalemleri WHERE teklif_id=?", (secilen_teklif_id,)).fetchall()
+                conn.close()
+                
+                if t_row:
+                    st.session_state.yuklenen_musteri = t_row[0]
+                    st.session_state.kalemler = [
+                        {"urun": k[0], "miktar": float(k[1]), "fiyat": float(k[2]), "toplam": float(k[3])}
+                        for k in k_rows
+                    ]
+                    st.success("Teklif ekrana yüklendi!")
+                    st.rerun()
+                    
+            if col_y2.button("Seçili Teklifi Sil"):
+                conn = sqlite3.connect(DB_NAME)
+                conn.execute("DELETE FROM teklifler WHERE id=?", (secilen_teklif_id,))
+                conn.execute("DELETE FROM teklif_kalemleri WHERE teklif_id=?", (secilen_teklif_id,))
+                conn.commit()
+                conn.close()
+                st.success("Kayıtlı teklif silindi.")
+                st.rerun()
+        else:
+            st.info("Henüz kaydedilmiş bir teklif bulunmuyor.")
+
     st.subheader("Stoktan veya Manuel Ürün Ekle")
     
     conn = sqlite3.connect(DB_NAME)
@@ -397,24 +466,54 @@ with tab_teklif:
         stok_default_adi = stok_map[secilen_stok_key][1]
         stok_default_fiyat = float(stok_map[secilen_stok_key][2])
 
-    with st.form("kalem_ekle_form"):
+    with st.form("kalem_ekle_form", clear_on_submit=True):
         fk1, fk2, fk3 = st.columns([3, 1, 1])
         u_adi = fk1.text_input("Ürün / Hizmet Açıklaması", value=stok_default_adi)
-        u_mikt = fk2.number_input("Miktar", min_value=1.0, value=1.0)
+        u_mikt = fk2.number_input("Miktar", min_value=0.1, value=1.0, step=1.0)
         u_fiyat = fk3.number_input("Birim Fiyat ($)", min_value=0.0, value=stok_default_fiyat)
         
         if st.form_submit_button("Listeye Ekle") and u_adi:
             st.session_state.kalemler.append({
-                "urun": u_adi, "miktar": u_mikt, "fiyat": u_fiyat, "toplam": u_mikt * u_fiyat
+                "urun": u_adi, "miktar": float(u_mikt), "fiyat": float(u_fiyat), "toplam": float(u_mikt * u_fiyat)
             })
             st.success("Kalem teklif listesine eklendi.")
             st.rerun()
 
     if st.session_state.kalemler:
-        st.write("### Teklif Kalemleri")
-        df_kalemler = pd.DataFrame(st.session_state.kalemler)
-        st.dataframe(df_kalemler, use_container_width=True)
+        st.write("### 📝 Eklenen Teklif Kalemleri ve Düzenleme")
         
+        # --- TEKLİF DÜZENLEME TABLOSU ---
+        yeni_kalemler = []
+        silinecek_index = None
+
+        for idx, item in enumerate(st.session_state.kalemler):
+            col_d1, col_d2, col_d3, col_d4, col_d5 = st.columns([3, 1.2, 1.5, 1.5, 0.8])
+            
+            e_urun = col_d1.text_input(f"Açıklama #{idx+1}", value=item["urun"], key=f"urun_{idx}")
+            e_mikt = col_d2.number_input(f"Miktar #{idx+1}", min_value=0.1, value=float(item["miktar"]), step=1.0, key=f"mikt_{idx}")
+            e_fiyat = col_d3.number_input(f"Birim Fiyat ($) #{idx+1}", min_value=0.0, value=float(item["fiyat"]), key=f"fiyat_{idx}")
+            
+            toplam_val = e_mikt * e_fiyat
+            col_d4.markdown(f"<br/><b>Toplam:</b> ${toplam_val:,.2f}", unsafe_allow_html=True)
+            
+            if col_d5.button("🗑️", key=f"sil_{idx}", help="Kalemi Sil"):
+                silinecek_index = idx
+
+            yeni_kalemler.append({
+                "urun": e_urun,
+                "miktar": float(e_mikt),
+                "fiyat": float(e_fiyat),
+                "toplam": float(toplam_val)
+            })
+
+        if silinecek_index is not None:
+            st.session_state.kalemler.pop(silinecek_index)
+            st.rerun()
+        else:
+            st.session_state.kalemler = yeni_kalemler
+
+        st.divider()
+
         toplam_usd = sum(k["toplam"] for k in st.session_state.kalemler)
         ara_toplam_tl = toplam_usd * kur
         kdv_tl = ara_toplam_tl * 0.20
@@ -425,22 +524,52 @@ with tab_teklif:
         else:
             st.info(f"**Ara Toplam:** ${toplam_usd:,.2f} (₺{ara_toplam_tl:,.2f}) | **KDV:** ₺{kdv_tl:,.2f} | **GENEL TOPLAM:** ₺{genel_toplam_tl:,.2f}")
 
-        col_b1, col_b2, col_b3 = st.columns([1, 2, 1])
+        col_b1, col_b2, col_b3, col_b4 = st.columns([1, 1.5, 1.5, 1])
+        
         if col_b1.button("Listeyi Temizle"):
             st.session_state.kalemler = []
+            st.session_state.yuklenen_musteri = ""
             st.rerun()
 
+        # --- TEKLİFİ VERİTABANINA KAYDETME ---
+        if col_b2.button("💾 Teklifi Kaydet", type="primary"):
+            if not musteri_input:
+                st.error("Lütfen teklifi kaydetmeden önce bir Müşteri/Firma Adı girin.")
+            else:
+                conn = sqlite3.connect(DB_NAME)
+                cursor = conn.cursor()
+                
+                tarih_kod = datetime.now().strftime("%Y%m%d")
+                teklif_no = f"TKL-{tarih_kod}-{random.randint(1000, 9999)}"
+                tarih_str = datetime.now().strftime("%d.%m.%Y %H:%M")
+                
+                cursor.execute("""
+                    INSERT INTO teklifler (teklif_no, musteri_adi, tarih, para_birimi, kur, toplam_usd)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (teklif_no, musteri_input, tarih_str, para_birimi, kur, toplam_usd))
+                
+                teklif_id = cursor.lastrowid
+                
+                for k in st.session_state.kalemler:
+                    cursor.execute("""
+                        INSERT INTO teklif_kalemleri (teklif_id, urun_adi, miktar, birim_fiyat, toplam)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (teklif_id, k["urun"], k["miktar"], k["fiyat"], k["toplam"]))
+                    
+                conn.commit()
+                conn.close()
+                st.success(f"Teklif başarıyla kaydedildi! (Teklif No: {teklif_no})")
+
         pdf_bytes = pdf_uret_buffer(musteri_input or "Musteri", kur, para_birimi, st.session_state.kalemler)
-        col_b2.download_button(
-            label="📥 PDF Teklifi Oluştur ve İndir",
+        col_b3.download_button(
+            label="📥 PDF Teklifi İndir",
             data=pdf_bytes,
             file_name=f"Teklif_{musteri_input.replace(' ', '_')}.pdf",
             mime="application/pdf",
-            type="primary",
             use_container_width=True
         )
         
-        if col_b3.button("Stoktan Düş"):
+        if col_b4.button("Stoktan Düş"):
             conn = sqlite3.connect(DB_NAME)
             cursor = conn.cursor()
             for k in st.session_state.kalemler:
@@ -535,7 +664,7 @@ with tab_cari:
 
         with st.form("cari_har_form"):
             hc1, hc2, hc3, hc4 = st.columns(4)
-            h_tarih = hc1.text_input("Tarih", value="31.08.2026")
+            h_tarih = hc1.text_input("Tarih", value=datetime.now().strftime("%d.%m.%Y"))
             h_tur = hc2.selectbox("İşlem Türü", ["Borç (Satış/Alacaklandır)", "Alacak (Ödeme Alma/Tahsilat)"])
             h_tutar = hc3.number_input("Tutar", min_value=0.0)
             h_birim = hc4.selectbox("Para Birimi", ["TRY (₺)", "USD ($)"])
@@ -614,7 +743,7 @@ with tab_kasa:
 
     with st.form("kasa_form"):
         kc1, kc2, kc3, kc4 = st.columns(4)
-        k_tarih = kc1.text_input("Tarih", value="31.08.2026")
+        k_tarih = kc1.text_input("Tarih", value=datetime.now().strftime("%d.%m.%Y"))
         k_tur = kc2.selectbox("İşlem Türü", ["Tahsilat (Gelir)", "Ödeme (Gider)"])
         k_tutar = kc3.number_input("Tutar", min_value=0.0)
         k_birim = kc4.selectbox("Birim", ["TRY (₺)", "USD ($)"])
